@@ -33,9 +33,10 @@ import (
 )
 
 const (
-	resourceId      = "resourceId"
-	aksClusterType  = "aks"
-	subresourceAttr = "Microsoft.ContainerService/managedClusters/resources:subresource"
+	resourceId       = "resourceId"
+	aksClusterType   = "aks"
+	fleetClusterType = fleets
+	subresourceAttr  = "Microsoft.ContainerService/managedClusters/resources:subresource"
 )
 
 func createOperationsMap(clusterType string) azureutils.OperationsMap {
@@ -1078,6 +1079,130 @@ func Test_prepareCheckAccessRequestBodyWithFleetMembers(t *testing.T) {
 			// Verify Subject.Attributes.ObjectId is set
 			if got[0].Subject.Attributes.ObjectId != id.String() {
 				t.Errorf("Subject.Attributes.ObjectId: want %q, got %q", id.String(), got[0].Subject.Attributes.ObjectId)
+			}
+		})
+	}
+}
+
+func Test_prepareCheckAccessRequestBodyWithFleetCustomResource(t *testing.T) {
+	id := uuid.New()
+	fleetResourceID := "/subscriptions/12345678-1234-1234-1234-123456789abc/resourceGroups/testResourceGroup/providers/Microsoft.ContainerService/fleets/my-fleet"
+
+	tests := []struct {
+		name         string
+		req          *authzv1.SubjectAccessReviewSpec
+		clusterType  string
+		resourceID   string
+		wantAction   string
+		wantAttrGrp  string
+		wantAttrKind string
+	}{
+		{
+			name: "fleet custom resource with group and kind",
+			req: &authzv1.SubjectAccessReviewSpec{
+				ResourceAttributes: &authzv1.ResourceAttributes{
+					Namespace: "default",
+					Group:     "fleet.azure.com",
+					Resource:  "membercluster",
+					Verb:      "get",
+				},
+				Extra: map[string]authzv1.ExtraValue{"oid": {id.String()}},
+			},
+			clusterType:  fleetClusterType,
+			resourceID:   fleetResourceID,
+			wantAction:   "Microsoft.ContainerService/fleets/customresources/read",
+			wantAttrGrp:  "fleet.azure.com",
+			wantAttrKind: "membercluster",
+		},
+		{
+			name: "fleet member custom resource with group and kind",
+			req: &authzv1.SubjectAccessReviewSpec{
+				ResourceAttributes: &authzv1.ResourceAttributes{
+					Namespace: "kube-system",
+					Group:     "work.open-cluster-management.io",
+					Resource:  "manifestwork",
+					Verb:      "create",
+				},
+				Extra: map[string]authzv1.ExtraValue{"oid": {id.String()}},
+			},
+			clusterType:  fleetMembers,
+			resourceID:   fleetResourceID,
+			wantAction:   "Microsoft.ContainerService/fleets/members/customresources/write",
+			wantAttrGrp:  "work.open-cluster-management.io",
+			wantAttrKind: "manifestwork",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			operationsMap := createOperationsMap(tt.clusterType)
+			getStoredOperationsMap = func() azureutils.OperationsMap {
+				return operationsMap
+			}
+
+			ctx := context.Background()
+			got, err := prepareCheckAccessRequestBody(ctx, tt.req, tt.clusterType, tt.resourceID, false, true, false)
+
+			if err != nil {
+				t.Errorf("prepareCheckAccessRequestBody() error = %v", err)
+				return
+			}
+
+			if got == nil {
+				t.Errorf("prepareCheckAccessRequestBody() returned nil")
+				return
+			}
+
+			if len(got) != 1 {
+				t.Errorf("len(got) = %d, want 1", len(got))
+				return
+			}
+
+			if len(got[0].Actions) != 1 {
+				t.Errorf("len(got[0].Actions) = %d, want 1", len(got[0].Actions))
+				return
+			}
+
+			// Verify action
+			action := got[0].Actions[0]
+			if action.AuthorizationEntity.Id != tt.wantAction {
+				t.Errorf("Action.Id = %q, want %q", action.AuthorizationEntity.Id, tt.wantAction)
+			}
+
+			// Verify IsDataAction
+			if !action.IsDataAction {
+				t.Errorf("Action.IsDataAction = false, want true")
+			}
+
+			// Verify attributes
+			if action.Attributes == nil {
+				t.Errorf("Action.Attributes is nil, want non-nil")
+				return
+			}
+
+			// Determine expected attribute prefix
+			var attrPrefix string
+			switch tt.clusterType {
+			case fleetClusterType:
+				attrPrefix = "Microsoft.ContainerService/fleets/customResources"
+			case fleetMembers:
+				attrPrefix = "Microsoft.ContainerService/fleets/members/customResources"
+			}
+
+			groupAttr := attrPrefix + ":group"
+			kindAttr := attrPrefix + ":kind"
+
+			if got, want := action.Attributes[groupAttr], tt.wantAttrGrp; got != want {
+				t.Errorf("Action.Attributes[%q] = %q, want %q", groupAttr, got, want)
+			}
+
+			if got, want := action.Attributes[kindAttr], tt.wantAttrKind; got != want {
+				t.Errorf("Action.Attributes[%q] = %q, want %q", kindAttr, got, want)
+			}
+
+			// Verify Subject.Attributes.ObjectId
+			if got[0].Subject.Attributes.ObjectId != id.String() {
+				t.Errorf("Subject.Attributes.ObjectId = %q, want %q", got[0].Subject.Attributes.ObjectId, id.String())
 			}
 		})
 	}

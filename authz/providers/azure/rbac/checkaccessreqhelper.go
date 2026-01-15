@@ -481,7 +481,7 @@ func getAuthInfoListForCustomResource(ctx context.Context, subRevReq *authzv1.Su
 	}
 
 	for i := range authInfoList {
-		err := setAuthInfoResourceAttributes(&authInfoList[i], subRevReq)
+		err := setAuthInfoResourceAttributes(&authInfoList[i], subRevReq, clusterType)
 		if err != nil {
 			return nil, fmt.Errorf("Error while setting resource attributes: %s", err.Error())
 		}
@@ -490,7 +490,7 @@ func getAuthInfoListForCustomResource(ctx context.Context, subRevReq *authzv1.Su
 	return authInfoList, nil
 }
 
-func setAuthInfoResourceAttributes(action *azureutils.AuthorizationActionInfo, subRevReq *authzv1.SubjectAccessReviewSpec) error {
+func setAuthInfoResourceAttributes(action *azureutils.AuthorizationActionInfo, subRevReq *authzv1.SubjectAccessReviewSpec, clusterType string) error {
 	if subRevReq.ResourceAttributes == nil {
 		return errors.New("Resource attributes are empty")
 	}
@@ -498,9 +498,13 @@ func setAuthInfoResourceAttributes(action *azureutils.AuthorizationActionInfo, s
 		return errors.New("Group is empty")
 	}
 	action.Attributes = make(map[string]string)
-	action.Attributes["Microsoft.ContainerService/managedClusters/customResources:group"] = subRevReq.ResourceAttributes.Group
+
+	// Construct attribute prefix by appending /customResources to cluster type
+	attrPrefix := clusterType + "/customResources"
+
+	action.Attributes[attrPrefix+":group"] = subRevReq.ResourceAttributes.Group
 	if subRevReq.ResourceAttributes.Resource != "" {
-		action.Attributes["Microsoft.ContainerService/managedClusters/customResources:kind"] = subRevReq.ResourceAttributes.Resource
+		action.Attributes[attrPrefix+":kind"] = subRevReq.ResourceAttributes.Resource
 	}
 	return nil
 }
